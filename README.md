@@ -3,7 +3,7 @@
 ![BAMBOO Logo](logo.png)
 
 
-Boosted Augmentation for Machine-Based Output on Objects  🐼)
+Boosted Augmentation for Machine-Based Output on Objects  🐼
 
 BAMBOO enriches your pandas DataFrames using LLMs and returns structured outputs via Pydantic models. It supports both row-by-row processing and efficient batch processing to reduce API calls and latency.
 
