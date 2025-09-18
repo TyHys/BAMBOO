@@ -1,0 +1,44 @@
+# Env and secrets
+.env
+.env.*
+
+# Python build/cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+
+# Tools and caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+coverage.xml
+
+# Editors/IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Project data
+outputs/
+inputs/*
+inputs/
+!inputs/sample_data.csv
+!inputs/.gitkeep
+
+# LLM cache
+.bamboo_cache.json

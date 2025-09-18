@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bamboo"
+version = "0.1.0"
+description = "BAMBOO: Boosted Augmentation for Machine-Based Output on Objects (pandas)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Tyler Hayes", email = "tyler.hayes@live.com" }
+]
+dependencies = [
+  "pandas>=1.5",
+  "openai>=1.0.0",
+  "pydantic>=2.0",
+  "tenacity>=8.2",
+  "tqdm>=4.66",
+  "typing-extensions>=4.8"
+]
+
+[project.urls]
+Homepage = "https://github.com/TyHys/BAMBOO"
+Repository = "https://github.com/TyHys/BAMBOO"
+
+[tool.setuptools]
+packages = ["bamboo", "examples", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"
+
