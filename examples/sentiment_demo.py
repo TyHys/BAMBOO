@@ -15,16 +15,35 @@ class SentimentOutput(BaseModel):
 
 
 def main() -> None:
-    df = pd.DataFrame({"text": ["I love this!", "This is bad.", "It’s okay."]})
+    
+    df = pd.DataFrame({
+        "text": [
+            "I love this product because it always brightens my day instantly.",
+            "This is genuinely impressive and exceeded my expectations in every possible way.",
+            "It’s okay, but honestly I discovered more good than I first expected.",
+            "I would recommend this to everyone since it brings consistent happiness daily.",
+            "Using this has been such a joy, it feels wonderful every time.",
+            "The overall experience was excellent and I cannot wait to enjoy again.",
+            "I’m delighted with how well this turned out, simply a great choice.",
+            "Every time I use this I feel better, happier, and more energized.",
+            "This has been one of the most enjoyable experiences I have ever had.",
+            "I’m very pleased with this and look forward to recommending it widely."
+        ]
+    })
+
     llm_df = LLMDataFrame(df)
-    df2 = llm_df.enrich(
+
+    df2 = llm_df.batch_enrich(
         input_col="text",
         response_model=SentimentOutput,
         prompt_template=(
             "Analyze this text and return sentiment, category, and 3 keywords as JSON.\n"
             "Text: {value}"
         ),
+        model="gpt-4o-mini",
+        batch_size=5,
     )
+
     print(df2)
 
 
