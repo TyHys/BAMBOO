@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from bamboo import LLMDataFrame
+import bamboo  # noqa: F401  # Registers pandas accessor via package import
 
 
 class SentimentResult(BaseModel):
@@ -40,8 +40,7 @@ def main() -> None:
         "Text: {value}"
     )
 
-    llm_df = LLMDataFrame(df)
-    df_out = llm_df.batch_enrich(
+    df_out = df.bamboo.batch_enrich(
         input_col=input_col,
         response_model=SentimentResult,
         prompt_template=prompt_template,

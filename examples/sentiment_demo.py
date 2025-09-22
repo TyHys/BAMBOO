@@ -5,7 +5,7 @@ from typing import List
 import pandas as pd
 from pydantic import BaseModel
 
-from bamboo import LLMDataFrame
+import bamboo  # noqa: F401  # Registers pandas accessor via package import
 
 
 class SentimentOutput(BaseModel):
@@ -43,9 +43,7 @@ def main() -> None:
         ]
     })
 
-    llm_df = LLMDataFrame(df)
-
-    df2 = llm_df.enrich(
+    df2 = df.bamboo.enrich(
         input_cols=["text", "category"],
         response_model=SentimentOutput,
         prompt_template=(

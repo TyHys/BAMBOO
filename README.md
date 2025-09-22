@@ -9,7 +9,8 @@ BAMBOO enriches your pandas DataFrames using LLMs and returns structured outputs
 
 ## Features
 - Structured LLM outputs validated by Pydantic
-- Simple DataFrame API: `LLMDataFrame.enrich` and `LLMDataFrame.batch_enrich`
+- Preferred DataFrame API: `df.bamboo.enrich(...)` and `df.bamboo.batch_enrich(...)`
+- Also available: `LLMDataFrame.enrich` and `LLMDataFrame.batch_enrich`
 - Batch mode: send multiple rows in a single LLM request
 - Automatic `.env` loading for `OPENAI_API_KEY`
 - Lightweight on-disk caching to avoid re-calling unchanged prompts
@@ -31,11 +32,11 @@ Provide your OpenAI API key via either:
   export OPENAI_API_KEY=your_key
   ```
 
-## Quick Start
+## Quick Start (preferred accessor syntax)
 ```python
 import pandas as pd
 from pydantic import BaseModel, Field
-from bamboo import LLMDataFrame
+import bamboo  # registers the pandas accessor: df.bamboo
 
 class SentimentResult(BaseModel):
     score: int = Field(ge=0, le=100)
@@ -48,10 +49,8 @@ system_prompt = (
 )
 prompt_template = "Analyze and return {'score','explanation'} for: {value}"
 
-llm_df = LLMDataFrame(df)
-
 # Row-by-row
-out1 = llm_df.enrich(
+out1 = df.bamboo.enrich(
     input_col="text",
     response_model=SentimentResult,
     prompt_template=prompt_template,
@@ -60,7 +59,7 @@ out1 = llm_df.enrich(
 )
 
 # Batched (recommended for larger DataFrames)
-out2 = llm_df.batch_enrich(
+out2 = df.bamboo.batch_enrich(
     input_col="text",
     response_model=SentimentResult,
     prompt_template=prompt_template,
@@ -70,6 +69,25 @@ out2 = llm_df.batch_enrich(
 )
 
 print(out2[["text", "score", "explanation"]])
+```
+
+### Multi-column templating
+You can provide multiple columns and reference them by name in the prompt template.
+```python
+df = pd.DataFrame({
+    "text": ["Great build quality."],
+    "category": ["consumer electronics"],
+})
+
+out = df.bamboo.enrich(
+    input_cols=["text", "category"],
+    response_model=SentimentResult,
+    prompt_template=(
+        "Analyze the following product feedback within its category and return JSON.\n"
+        "Category: {category}\n"
+        "Text: {text}"
+    ),
+)
 ```
 
 ## Demos
