@@ -28,20 +28,32 @@ def main() -> None:
             "Every time I use this I feel better, happier, and more energized.",
             "This has been one of the most enjoyable experiences I have ever had.",
             "I’m very pleased with this and look forward to recommending it widely."
+        ],
+        "category": [
+            "consumer electronics",
+            "home appliances",
+            "books",
+            "fitness",
+            "travel",
+            "software",
+            "food & beverage",
+            "health & wellness",
+            "entertainment",
+            "fashion"
         ]
     })
 
     llm_df = LLMDataFrame(df)
 
-    df2 = llm_df.batch_enrich(
-        input_col="text",
+    df2 = llm_df.enrich(
+        input_cols=["text", "category"],
         response_model=SentimentOutput,
         prompt_template=(
-            "Analyze this text and return sentiment, category, and 3 keywords as JSON.\n"
-            "Text: {value}"
+            "Analyze the following product feedback within its category and return JSON matching the schema.\n"
+            "Category: {category}\n"
+            "Text: {text}"
         ),
         model="gpt-4o-mini",
-        batch_size=5,
     )
 
     print(df2)
