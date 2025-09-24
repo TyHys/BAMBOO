@@ -162,3 +162,12 @@ BAMBOO enforces strict JSON with OpenAI’s `response_format=json_schema`. The P
 
 ## License
 MIT
+
+## To-do
+
+* Experiment with various models to ensure compatability.
+* Realtime file writing
+* Resume enrichment from partial completion
+* Merge bamboo.batch_enrich() into bamboo.enrich(), where batch_size will be an optional argument to turn on batching.
+* Add Claude support
+* Add Gemini support
