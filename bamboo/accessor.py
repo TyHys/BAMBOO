@@ -14,7 +14,7 @@ class BambooAccessor:
     """Pandas accessor to call BAMBOO directly on any DataFrame.
 
     Example:
-        df_out = df.bamboo.enrich(input_cols=[...], response_model=..., prompt_template=...)
+        df_out = df.bamboo.enrich(response_model=..., user_prompt_template=..., system_prompt_template=...)
     """
 
     def __init__(self, pandas_obj: pd.DataFrame) -> None:

@@ -1,6 +1,8 @@
 # BAMBOO
 
-![BAMBOO Logo](logo.png)
+<p align="center">
+  <img src="logo.png" alt="BAMBOO Logo" />
+</p>
 
 
 Boosted Augmentation for Machine-Based Output on Objects  🐼
@@ -9,11 +11,10 @@ BAMBOO enriches your pandas DataFrames using LLMs and returns structured outputs
 
 ## Features
 - Structured LLM outputs validated by Pydantic
-- Preferred DataFrame API: `df.bamboo.enrich(...)` and `df.bamboo.batch_enrich(...)`
-- Also available: `LLMDataFrame.enrich` and `LLMDataFrame.batch_enrich`
+- Integrated API: `df.bamboo.enrich(...)` and `df.bamboo.batch_enrich(...)`
 - Batch mode: send multiple rows in a single LLM request
 - Automatic input inference from template placeholders (no need for `input_col` if templates reference DataFrame columns)
-- Unique-combination deduplication: only one LLM call per unique combination of referenced fields, with results broadcast back to matching rows
+- Unique-combination deduplication: only one LLM call per unique combination of prompt-included fields, with results broadcast back to matching rows.
 - Automatic `.env` loading for `OPENAI_API_KEY`
 - Lightweight on-disk caching to avoid re-calling unchanged prompts
 
@@ -46,30 +47,33 @@ class SentimentResult(BaseModel):
 
 df = pd.DataFrame({"text": ["I love this!", "This is bad.", "It’s okay."]})
 
-system_prompt = (
+system_prompt_template = (
     "Return JSON only. For each input, produce integer 'score' (0–100) and 'explanation'."
 )
-prompt_template = "Analyze and return {'score','explanation'} for: {text}"
+user_prompt_template = "Analyze and return {'score','explanation'} for: {text}"
 
 # Row-by-row (inputs inferred from placeholders: uses df['text'])
 out1 = df.bamboo.enrich(
     response_model=SentimentResult,
-    prompt_template=prompt_template,
-    system_prompt=system_prompt,
+    user_prompt_template=user_prompt_template,
+    system_prompt_template=system_prompt_template,
     temperature=0.0,
 )
 
 # Batched (recommended for larger DataFrames)
 out2 = df.bamboo.batch_enrich(
     response_model=SentimentResult,
-    prompt_template=prompt_template,
-    system_prompt=system_prompt,
+    user_prompt_template=user_prompt_template,
+    system_prompt_template=system_prompt_template,
     temperature=0.0,
     batch_size=5,
 )
 
 print(out2[["text", "score", "explanation"]])
 ```
+
+### Recommended usage
+- Use the pandas accessor methods: `df.bamboo.enrich(...)` and `df.bamboo.batch_enrich(...)`.
 
 ### Multi-column templating
 Reference multiple columns by name directly in your templates.
@@ -82,7 +86,7 @@ df = pd.DataFrame({
 # Placeholders match DataFrame columns, so inputs are inferred automatically
 out = df.bamboo.enrich(
     response_model=SentimentResult,
-    prompt_template=(
+    user_prompt_template=(
         "Analyze the following product feedback within its category and return JSON.\n"
         "Category: {category}\n"
         "Text: {text}"
@@ -91,7 +95,7 @@ out = df.bamboo.enrich(
 ```
 
 ### Automatic input inference (no input_cols)
-- Inputs are inferred from placeholders found in any of: `prompt_template`, `system_prompt`, or `system_prompt_template`.
+- Inputs are inferred from placeholders found in any of: `user_prompt_template` or `system_prompt_template`.
 - If no placeholders are found, an error is raised; add `{col_name}` placeholders to your templates.
 - If any placeholder does not match a DataFrame column, an error lists the missing columns.
 
@@ -120,7 +124,24 @@ get_ipython().kernel.do_shutdown(True)
 
 ## Caching
 - Cache file: `.bamboo_cache.json` in the working directory
-- Disable cache by constructing `LLMDataFrame(df, use_cache=False)` or pass a custom path via `cache_path`
+- Toggle per call with the pandas accessor (recommended):
+  ```python
+  # Disable cache for this call
+  df.bamboo.enrich(
+      response_model=SentimentResult,
+      user_prompt_template=user_prompt_template,
+      system_prompt_template=system_prompt_template,
+      use_cache=False,
+  )
+
+  # Custom cache path
+  df.bamboo.batch_enrich(
+      response_model=SentimentResult,
+      user_prompt_template=user_prompt_template,
+      system_prompt_template=system_prompt_template,
+      cache_path="./my_cache/bamboo_cache.json",
+  )
+  ```
 
 ## Models and Strict JSON
 BAMBOO enforces strict JSON with OpenAI’s `response_format=json_schema`. The Pydantic model’s JSON schema is adapted to set `additionalProperties=false` across all object nodes for consistent parsing.
@@ -129,11 +150,7 @@ BAMBOO enforces strict JSON with OpenAI’s `response_format=json_schema`. The P
 - Python 3.10+
 - OpenAI account and API key
 
-## Development
-- Run tests (if any):
-```bash
-pytest -q
-```
+
 - Linting: this repo relies on type hints and basic style; integrate your preferred linter if desired.
 
 ## License

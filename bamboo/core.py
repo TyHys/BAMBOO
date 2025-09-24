@@ -76,10 +76,11 @@ class LLMDataFrame:
         *,
         input_col: Optional[str] = None,
         response_model: Type[BaseModel],
-        prompt_template: str,
-        system_prompt: Optional[str] = None,
+        user_prompt_template: Optional[str] = None,
         input_cols: Optional[Union[List[str], Dict[str, str]]] = None,
         system_prompt_template: Optional[str] = None,
+        # Backward-compat: accept legacy name; prefer user_prompt_template when both provided
+        prompt_template: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: Optional[int] = None,
@@ -90,19 +91,24 @@ class LLMDataFrame:
         Adds new columns for each field in the response_model.
         Returns updated DataFrame.
         """
+        # Normalize prompt parameter
+        if user_prompt_template is None and prompt_template is not None:
+            user_prompt_template = prompt_template
+        if user_prompt_template is None:
+            raise TypeError("user_prompt_template is required")
+
         # input_cols is obsolete
         if input_cols is not None:
-            raise TypeError("input_cols is obsolete. Reference DataFrame columns in prompt_template/system_prompt instead.")
+            raise TypeError("input_cols is obsolete. Reference DataFrame columns in prompt_template/system_prompt_template instead.")
 
-        # Determine required fields from templates (prompt_template, system_prompt, system_prompt_template)
+        # Determine required fields from templates (user_prompt_template, system_prompt_template)
         inferred_fields = (
-            self._extract_placeholders(prompt_template)
-            | self._extract_placeholders(system_prompt)
+            self._extract_placeholders(user_prompt_template)
             | self._extract_placeholders(system_prompt_template)
         )
         if not inferred_fields:
             raise KeyError(
-                "No input columns inferred from templates. Add placeholders (e.g., {col_name}) to prompt_template or system_prompt."
+                "No input columns inferred from templates. Add placeholders (e.g., {col_name}) to prompt_template or system_prompt_template."
             )
         missing = [f for f in inferred_fields if f not in self.df.columns]
         if missing:
@@ -120,8 +126,7 @@ class LLMDataFrame:
 
         # Determine which fields are actually used by the templates
         used_fields = (
-            self._extract_placeholders(prompt_template)
-            | self._extract_placeholders(system_prompt)
+            self._extract_placeholders(user_prompt_template)
             | self._extract_placeholders(system_prompt_template)
         ) & set(inferred_fields)
 
@@ -157,12 +162,9 @@ class LLMDataFrame:
             sig = signatures[rep_idx]
 
             # Build prompts
-            user_prompt = self._safe_format(prompt_template, context)
+            user_prompt = self._safe_format(user_prompt_template, context)
             if system_prompt_template is not None:
                 final_system_prompt = self._safe_format(system_prompt_template, context)
-            elif system_prompt is not None:
-                # Allow placeholders in system_prompt too
-                final_system_prompt = self._safe_format(system_prompt, context)
             else:
                 final_system_prompt = None
             cache_context_repr = json.dumps(context, ensure_ascii=False, default=str, sort_keys=True)
@@ -174,8 +176,7 @@ class LLMDataFrame:
                     f"temperature={temperature}",
                     f"max_tokens={max_tokens}",
                     f"schema={schema_h}",
-                    f"prompt_template={prompt_template}",
-                    f"system_prompt={system_prompt or ''}",
+                    f"user_prompt_template={user_prompt_template}",
                     f"system_prompt_template={system_prompt_template or ''}",
                     f"context={cache_context_repr}",
                 ]
@@ -234,8 +235,13 @@ class LLMDataFrame:
         """
         input_col: Optional[str] = kwargs.pop("input_col", None)
         response_model: Type[BaseModel] = kwargs.pop("response_model")
-        prompt_template: str = kwargs.pop("prompt_template")
-        system_prompt: Optional[str] = kwargs.pop("system_prompt", None)
+        # Support new and legacy names for user prompt
+        user_prompt_template: Optional[str] = kwargs.pop("user_prompt_template", None)
+        legacy_prompt_template: Optional[str] = kwargs.pop("prompt_template", None)
+        if user_prompt_template is None and legacy_prompt_template is not None:
+            user_prompt_template = legacy_prompt_template
+        if user_prompt_template is None:
+            raise TypeError("user_prompt_template is required")
         input_cols: Optional[Union[List[str], Dict[str, str]]] = kwargs.pop("input_cols", None)
         system_prompt_template: Optional[str] = kwargs.pop("system_prompt_template", None)
         model: Optional[str] = kwargs.pop("model", None)
@@ -253,13 +259,12 @@ class LLMDataFrame:
 
         # Determine required fields from templates
         inferred_fields = (
-            self._extract_placeholders(prompt_template)
-            | self._extract_placeholders(system_prompt)
+            self._extract_placeholders(user_prompt_template)
             | self._extract_placeholders(system_prompt_template)
         )
         if not inferred_fields:
             raise KeyError(
-                "No input columns inferred from templates. Add placeholders (e.g., {col_name}) to prompt_template or system_prompt."
+                "No input columns inferred from templates. Add placeholders (e.g., {col_name}) to prompt_template or system_prompt_template."
             )
         missing = [f for f in inferred_fields if f not in self.df.columns]
         if missing:
@@ -289,8 +294,7 @@ class LLMDataFrame:
 
         # Deduplicate by used fields in templates
         used_fields = (
-            self._extract_placeholders(prompt_template)
-            | self._extract_placeholders(system_prompt)
+            self._extract_placeholders(user_prompt_template)
             | self._extract_placeholders(system_prompt_template)
         ) & set(inferred_fields)
 
@@ -335,16 +339,13 @@ class LLMDataFrame:
             batch_instruction = (
                 "Analyze the following items. For each item, produce an object matching the schema. "
                 "Return a JSON object with key 'results' as a list of objects in the SAME order as inputs.\n"
-                f"Items (each item is {'a raw value' if input_cols is None else 'a JSON object of fields'}):\n{items_block}"
+                f"Items (each item is a JSON object of fields):\n{items_block}"
             )
 
             messages: List[Dict[str, str]] = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            # Include the single-item prompt_template to orient the model (static part only), then add the batch payload
-            messages.append({"role": "user", "content": self._safe_format(prompt_template, {})})
             if system_prompt_template:
-                messages.append({"role": "user", "content": self._safe_format(system_prompt_template, {})})
+                messages.append({"role": "system", "content": self._safe_format(system_prompt_template, {})})
+            messages.append({"role": "user", "content": self._safe_format(user_prompt_template, {})})
             messages.append({"role": "user", "content": batch_instruction})
 
             content, usage = self.client.chat_structured(
