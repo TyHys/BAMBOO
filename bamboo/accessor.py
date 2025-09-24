@@ -31,15 +31,4 @@ class BambooAccessor:
         llm_df = LLMDataFrame(self._df, client=client, cache_path=cache_path, use_cache=use_cache)
         return llm_df.enrich(**kwargs)
 
-    def batch_enrich(
-        self,
-        *,
-        client: Optional[LLMClient] = None,
-        cache_path: Optional[str] = None,
-        use_cache: bool = True,
-        **kwargs: Any,
-    ) -> pd.DataFrame:
-        llm_df = LLMDataFrame(self._df, client=client, cache_path=cache_path, use_cache=use_cache)
-        return llm_df.batch_enrich(**kwargs)
-
 

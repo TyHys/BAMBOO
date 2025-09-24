@@ -7,12 +7,12 @@
 
 Boosted Augmentation for Machine-Based Output on Objects  🐼
 
-BAMBOO enriches your pandas DataFrames using LLMs and returns structured outputs via Pydantic models. It supports both row-by-row processing and efficient batch processing to reduce API calls and latency.
+BAMBOO enriches your pandas DataFrames using LLMs and returns structured outputs via Pydantic models. It supports both row-by-row processing and efficient batch processing (via `batch_size`) to reduce API calls and latency.
 
 ## Features
 - Structured LLM outputs validated by Pydantic
-- Integrated API: `df.bamboo.enrich(...)` and `df.bamboo.batch_enrich(...)`
-- Batch mode: send multiple rows in a single LLM request
+- Integrated API: `df.bamboo.enrich(..., batch_size=...)`
+- Batch mode: send multiple rows in a single LLM request by setting `batch_size>1`
 - Automatic input inference from template placeholders (no need for `input_col` if templates reference DataFrame columns)
 - Unique-combination deduplication: only one LLM call per unique combination of prompt-included fields, with results broadcast back to matching rows.
 - Automatic `.env` loading for `OPENAI_API_KEY`
@@ -41,45 +41,34 @@ import pandas as pd
 from pydantic import BaseModel, Field
 import bamboo  # registers the pandas accessor: df.bamboo
 
-class SentimentResult(BaseModel):
-    score: int = Field(ge=0, le=100)
-    explanation: str
-
 df = pd.DataFrame({"text": ["I love this!", "This is bad.", "It’s okay."]})
 
-system_prompt_template = (
-    "Return JSON only. For each input, produce integer 'score' (0–100) and 'explanation'."
-)
-user_prompt_template = "Analyze and return {'score','explanation'} for: {text}"
+class SentimentResult(BaseModel):
+    score: int = Field(ge=0, le=100, description="The score of the review, with 0 being the most negative and 100 being the most positive.")
+    explanation: str = Field(description="The explanation of the score.")
 
-# Row-by-row (inputs inferred from placeholders: uses df['text'])
-out1 = df.bamboo.enrich(
+system_prompt_template = "You are an assistant that analyzes reviews score and explanation."
+
+user_prompt_template = "Analyze the review and return 'score' and 'explanation' for: {text}"
+
+df_out = df.bamboo.enrich(
     response_model=SentimentResult,
     user_prompt_template=user_prompt_template,
     system_prompt_template=system_prompt_template,
     temperature=0.0,
+    batch_size=5
 )
 
-# Batched (recommended for larger DataFrames)
-out2 = df.bamboo.batch_enrich(
-    response_model=SentimentResult,
-    user_prompt_template=user_prompt_template,
-    system_prompt_template=system_prompt_template,
-    temperature=0.0,
-    batch_size=5,
-)
-
-print(out2[["text", "score", "explanation"]])
+print(df_out)
 ```
 
 ### Recommended usage
-- Use the pandas accessor methods: `df.bamboo.enrich(...)` and `df.bamboo.batch_enrich(...)`.
+- Use the pandas accessor method: `df.bamboo.enrich(..., batch_size=...)`.
 
 ### Progress bar
 - The progress bar (tqdm) is disabled by default. Enable it per call with `progress=True`:
   ```python
   df.bamboo.enrich(..., progress=True)
-  df.bamboo.batch_enrich(..., progress=True)
   ```
 
 ### Multi-column templating
@@ -108,7 +97,7 @@ out = df.bamboo.enrich(
 
 ### Unique-combination optimization (automatic)
 - BAMBOO detects which fields in your templates actually affect the prompt and deduplicates rows by the unique combinations of those fields. It runs the LLM once per unique combination and broadcasts the parsed result back to all matching rows.
-- Works in both `enrich` (row-by-row) and `batch_enrich` modes transparently.
+- Works in both row-by-row and batched modes transparently via `enrich(..., batch_size=...)`.
 - Example: your template references only `{department}` and `{severity}`; for 1,000 rows with 8 unique `(department, severity)` pairs, only 8 LLM inferences are made.
 
 ## Demos (Notebooks)
@@ -142,7 +131,7 @@ get_ipython().kernel.do_shutdown(True)
   )
 
   # Custom cache path
-  df.bamboo.batch_enrich(
+  df.bamboo.enrich(
       response_model=SentimentResult,
       user_prompt_template=user_prompt_template,
       system_prompt_template=system_prompt_template,
@@ -168,6 +157,5 @@ MIT
 * Experiment with various models to ensure compatability.
 * Realtime file writing
 * Resume enrichment from partial completion
-* Merge bamboo.batch_enrich() into bamboo.enrich(), where batch_size will be an optional argument to turn on batching.
 * Add Claude support
 * Add Gemini support

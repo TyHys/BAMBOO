@@ -47,7 +47,7 @@ def test_accessor_enrich_adds_columns() -> None:
     assert out.loc[0, "a"] == 1 and out.loc[1, "b"] == "v"
 
 
-def test_batch_enrich_deduplicates_unique_contexts() -> None:
+def test_enrich_batched_deduplicates_unique_contexts() -> None:
     rows = [
         {"department": "sales", "severity": "low"},
         {"department": "support", "severity": "high"},
@@ -65,7 +65,7 @@ def test_batch_enrich_deduplicates_unique_contexts() -> None:
     )
     client = DummyClient([batch_content])
 
-    out = df.bamboo.batch_enrich(
+    out = df.bamboo.enrich(
         client=client,
         response_model=DummyModel,
         user_prompt_template=(
