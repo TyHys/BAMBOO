@@ -17,6 +17,7 @@ class DummyClient:
     def __init__(self, responses: List[str]):
         self.responses = responses
         self.calls = 0
+        self.model = "test-model"
 
     def chat_structured(self, messages, **kwargs):  # type: ignore[no-untyped-def]
         content = self.responses[self.calls]
@@ -26,12 +27,11 @@ class DummyClient:
 
 def test_enrich_adds_columns():
     df = pd.DataFrame({"text": ["x", "y"]})
-    client = DummyClient(["{""a"":1,""b"":""u""}", "{""a"":2,""b"":""v""}"])
+    client = DummyClient(["{\"a\":1,\"b\":\"u\"}", "{\"a\":2,\"b\":\"v\"}"])
     llm_df = LLMDataFrame(df, client=client, use_cache=False)
     out = llm_df.enrich(
-        input_col="text",
         response_model=DummyModel,
-        prompt_template="Give me JSON for {value}",
+        user_prompt_template="Give me JSON for {text}",
         progress=False,
     )
 

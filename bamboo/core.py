@@ -216,7 +216,7 @@ class LLMDataFrame:
         if outputs:
             first_valid = next((o for o in outputs if o is not None), None)
             if first_valid is not None:
-                for field_name in first_valid.model_fields.keys():
+                for field_name in first_valid.__class__.model_fields.keys():
                     self.df[field_name] = [getattr(o, field_name, None) if o is not None else None for o in outputs]
 
         # Basic usage logging
@@ -379,7 +379,7 @@ class LLMDataFrame:
         if outputs:
             first_valid = next((o for o in outputs if o is not None), None)
             if first_valid is not None:
-                for field_name in first_valid.model_fields.keys():
+                for field_name in first_valid.__class__.model_fields.keys():
                     self.df[field_name] = [getattr(o, field_name, None) if o is not None else None for o in outputs]
 
         if usages:
