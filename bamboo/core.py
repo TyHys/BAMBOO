@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Type, Union, Set
+from string import Formatter
 
 import pandas as pd
 from pydantic import BaseModel, create_model
@@ -46,6 +47,23 @@ class LLMDataFrame:
         return template.format_map(_SafeDict(context))
 
     @staticmethod
+    def _extract_placeholders(template: Optional[str]) -> Set[str]:
+        """Extract placeholder field names from a format template string.
+
+        Returns a set of field names found inside curly braces, ignoring None templates.
+        """
+        if not template:
+            return set()
+        fields: Set[str] = set()
+        for literal_text, field_name, format_spec, conversion in Formatter().parse(template):  # type: ignore[assignment]
+            if field_name:
+                # Handle attribute/index lookups like {user[name]} by taking root before any punctuation
+                root = field_name.split(".")[0].split("[")[0]
+                if root:
+                    fields.add(root)
+        return fields
+
+    @staticmethod
     def _schema_hash(schema: Dict[str, Any]) -> str:
         try:
             dumped = json.dumps(schema, sort_keys=True, ensure_ascii=False)
@@ -72,60 +90,82 @@ class LLMDataFrame:
         Adds new columns for each field in the response_model.
         Returns updated DataFrame.
         """
-        if input_cols is None:
-            if not input_col or input_col not in self.df.columns:
-                raise KeyError(f"Input column '{input_col}' not in DataFrame")
-        else:
-            # Validate provided columns if list; if dict, validate mapped DataFrame columns
-            if isinstance(input_cols, list):
-                missing = [c for c in input_cols if c not in self.df.columns]
-                if missing:
-                    raise KeyError(f"Input columns missing from DataFrame: {missing}")
-            else:
-                missing = [src for src in input_cols.values() if src not in self.df.columns]
-                if missing:
-                    raise KeyError(f"Input columns missing from DataFrame: {missing}")
+        # input_cols is obsolete
+        if input_cols is not None:
+            raise TypeError("input_cols is obsolete. Reference DataFrame columns in prompt_template/system_prompt instead.")
+
+        # Determine required fields from templates (prompt_template, system_prompt, system_prompt_template)
+        inferred_fields = (
+            self._extract_placeholders(prompt_template)
+            | self._extract_placeholders(system_prompt)
+            | self._extract_placeholders(system_prompt_template)
+        )
+        if not inferred_fields:
+            raise KeyError(
+                "No input columns inferred from templates. Add placeholders (e.g., {col_name}) to prompt_template or system_prompt."
+            )
+        missing = [f for f in inferred_fields if f not in self.df.columns]
+        if missing:
+            raise KeyError(f"Template placeholders missing from DataFrame: {missing}")
 
         schema = model_to_openai_schema(response_model)
         outputs: List[BaseModel] = []
         usages: List[Dict[str, Any]] = []
 
-        # Build an iterator of contexts or plain values based on input_cols
-        if input_cols is None:
-            iterator: Iterable[Any] = self.df[input_col]
-        else:
-            contexts: List[Dict[str, Any]] = []
-            if isinstance(input_cols, list):
-                for _, row in self.df.iterrows():
-                    ctx: Dict[str, Any] = {name: row[name] for name in input_cols}
-                    contexts.append(ctx)
-            else:
-                # Mapping of template_name -> dataframe_column
-                for _, row in self.df.iterrows():
-                    ctx = {tpl_name: row[src_col] for tpl_name, src_col in input_cols.items()}
-                    contexts.append(ctx)
-            iterator = contexts
+        # Build contexts in-memory from inferred fields (needed for deduplication)
+        contexts: List[Dict[str, Any]] = []
+        for _, row in self.df.iterrows():
+            ctx = {name: row[name] for name in inferred_fields}
+            contexts.append(ctx)
+
+        # Determine which fields are actually used by the templates
+        used_fields = (
+            self._extract_placeholders(prompt_template)
+            | self._extract_placeholders(system_prompt)
+            | self._extract_placeholders(system_prompt_template)
+        ) & set(inferred_fields)
+
+        # Compute signatures for deduplication based on used fields only
+        def signature_for_context(ctx: Dict[str, Any]) -> str:
+            if not used_fields:
+                # No fields used -> static prompt
+                return "{}"
+            used_subset = {k: ctx.get(k) for k in sorted(used_fields)}
+            return json.dumps(used_subset, ensure_ascii=False, default=str, sort_keys=True)
+
+        signatures: List[str] = [signature_for_context(c) for c in contexts]
+
+        # Map unique signature -> representative index
+        sig_to_rep_index: Dict[str, int] = {}
+        rep_indices: List[int] = []
+        for idx, sig in enumerate(signatures):
+            if sig not in sig_to_rep_index:
+                sig_to_rep_index[sig] = idx
+                rep_indices.append(idx)
 
         chosen_model = model or self.client.model
         schema_h = self._schema_hash(schema)
+        rep_iterator: Iterable[int] = rep_indices
         if progress:
-            iterator = tqdm(iterator, total=len(self.df), desc="LLM enrich")
+            rep_iterator = tqdm(rep_indices, total=len(rep_indices), desc="LLM enrich (unique)")
 
-        for item in iterator:
-            if input_cols is None:
-                # Single column mode
-                user_prompt = prompt_template.format(value=item)
-                final_system_prompt = system_prompt
-                cache_context_repr = json.dumps({"value": item}, ensure_ascii=False, default=str)
+        # Hold results per signature and then broadcast
+        result_by_signature: Dict[str, Optional[BaseModel]] = {}
+
+        for rep_idx in rep_iterator:
+            context = contexts[rep_idx]
+            sig = signatures[rep_idx]
+
+            # Build prompts
+            user_prompt = self._safe_format(prompt_template, context)
+            if system_prompt_template is not None:
+                final_system_prompt = self._safe_format(system_prompt_template, context)
+            elif system_prompt is not None:
+                # Allow placeholders in system_prompt too
+                final_system_prompt = self._safe_format(system_prompt, context)
             else:
-                # Multi-column templating mode
-                context: Dict[str, Any] = item  # type: ignore[assignment]
-                user_prompt = self._safe_format(prompt_template, context)
-                if system_prompt_template is not None:
-                    final_system_prompt = self._safe_format(system_prompt_template, context)
-                else:
-                    final_system_prompt = system_prompt
-                cache_context_repr = json.dumps(context, ensure_ascii=False, default=str, sort_keys=True)
+                final_system_prompt = None
+            cache_context_repr = json.dumps(context, ensure_ascii=False, default=str, sort_keys=True)
 
             cache_key = "\n".join(
                 [
@@ -164,9 +204,12 @@ class LLMDataFrame:
                 logger.warning("Row parse failed; inserting None values. Error: %s", e)
                 parsed = None  # type: ignore[assignment]
 
-            outputs.append(parsed)
+            result_by_signature[sig] = parsed
             if usage:
                 usages.append(usage)
+
+        # Broadcast results to all rows
+        outputs = [result_by_signature.get(sig) for sig in signatures]
 
         # Add columns
         if outputs:
@@ -204,18 +247,23 @@ class LLMDataFrame:
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {list(kwargs.keys())}")
 
-        if input_cols is None:
-            if not input_col or input_col not in self.df.columns:
-                raise KeyError(f"Input column '{input_col}' not in DataFrame")
-        else:
-            if isinstance(input_cols, list):
-                missing = [c for c in input_cols if c not in self.df.columns]
-                if missing:
-                    raise KeyError(f"Input columns missing from DataFrame: {missing}")
-            else:
-                missing = [src for src in input_cols.values() if src not in self.df.columns]
-                if missing:
-                    raise KeyError(f"Input columns missing from DataFrame: {missing}")
+        # input_cols is obsolete
+        if input_cols is not None:
+            raise TypeError("input_cols is obsolete. Reference DataFrame columns in prompt_template/system_prompt instead.")
+
+        # Determine required fields from templates
+        inferred_fields = (
+            self._extract_placeholders(prompt_template)
+            | self._extract_placeholders(system_prompt)
+            | self._extract_placeholders(system_prompt_template)
+        )
+        if not inferred_fields:
+            raise KeyError(
+                "No input columns inferred from templates. Add placeholders (e.g., {col_name}) to prompt_template or system_prompt."
+            )
+        missing = [f for f in inferred_fields if f not in self.df.columns]
+        if missing:
+            raise KeyError(f"Template placeholders missing from DataFrame: {missing}")
 
         # Build a wrapper model: { results: List[response_model] }
         BatchModel = create_model(
@@ -225,16 +273,13 @@ class LLMDataFrame:
 
         schema = model_to_openai_schema(BatchModel)
 
-        if input_cols is None:
-            values: List[Any] = list(self.df[input_col])
-        else:
-            values = []
-            if isinstance(input_cols, list):
-                for _, row in self.df.iterrows():
-                    values.append({name: row[name] for name in input_cols})
-            else:
-                for _, row in self.df.iterrows():
-                    values.append({tpl: row[src] for tpl, src in input_cols.items()})
+        # Build contexts from inferred fields for batch mode
+        values = []
+        contexts: List[Dict[str, Any]] = []
+        for _, row in self.df.iterrows():
+            ctx = {name: row[name] for name in inferred_fields}
+            values.append(ctx)
+            contexts.append(ctx)
         outputs: List[Optional[BaseModel]] = []
         usages: List[Dict[str, Any]] = []
 
@@ -242,20 +287,50 @@ class LLMDataFrame:
             for i in range(0, len(seq), size):
                 yield seq[i : i + size]
 
-        iterator: Iterable[List[Any]] = list(chunk_iter(values, batch_size))
-        if progress:
-            iterator = tqdm(iterator, total=(len(values) + batch_size - 1) // batch_size, desc="LLM batch enrich")
+        # Deduplicate by used fields in templates
+        used_fields = (
+            self._extract_placeholders(prompt_template)
+            | self._extract_placeholders(system_prompt)
+            | self._extract_placeholders(system_prompt_template)
+        ) & set(inferred_fields)
 
+        def signature_for_context(ctx: Dict[str, Any]) -> str:
+            if not used_fields:
+                return "{}"
+            used_subset = {k: ctx.get(k) for k in sorted(used_fields)}
+            return json.dumps(used_subset, ensure_ascii=False, default=str, sort_keys=True)
+
+        signatures: List[str] = [signature_for_context(ctx) for ctx in contexts]
+        sig_to_rep_index: Dict[str, int] = {}
+        unique_contexts: List[Dict[str, Any]] = []
+        unique_values: List[Any] = []
+        unique_signatures: List[str] = []
+        for idx, sig in enumerate(signatures):
+            if sig not in sig_to_rep_index:
+                sig_to_rep_index[sig] = idx
+                unique_contexts.append(contexts[idx])
+                unique_values.append(values[idx])
+                unique_signatures.append(sig)
+
+        iterator: Iterable[List[Any]] = list(chunk_iter(unique_values, batch_size))
+        if progress:
+            iterator = tqdm(iterator, total=(len(unique_values) + batch_size - 1) // batch_size, desc="LLM batch enrich (unique)")
+
+        # Prepare mapping from signature to result
+        result_by_signature: Dict[str, Optional[BaseModel]] = {}
+
+        # Iterate chunks of unique items
+        start = 0
         for chunk in iterator:
+            # Determine signatures for this chunk to map parsed results
+            chunk_signatures = unique_signatures[start : start + len(chunk)]
+            chunk_contexts = unique_contexts[start : start + len(chunk)]
+            start += len(chunk)
             # Construct a batch prompt
             items_lines: List[str] = []
-            if input_cols is None:
-                for idx, v in enumerate(chunk, start=1):
-                    items_lines.append(f"{idx}) {v}")
-            else:
-                for idx, ctx in enumerate(chunk, start=1):
-                    ctx_json = json.dumps(ctx, ensure_ascii=False, default=str, sort_keys=True)
-                    items_lines.append(f"{idx}) {ctx_json}")
+            for idx_local, ctx in enumerate(chunk_contexts, start=1):
+                ctx_json = json.dumps(ctx, ensure_ascii=False, default=str, sort_keys=True)
+                items_lines.append(f"{idx_local}) {ctx_json}")
             items_block = "\n".join(items_lines)
             batch_instruction = (
                 "Analyze the following items. For each item, produce an object matching the schema. "
@@ -269,7 +344,6 @@ class LLMDataFrame:
             # Include the single-item prompt_template to orient the model (static part only), then add the batch payload
             messages.append({"role": "user", "content": self._safe_format(prompt_template, {})})
             if system_prompt_template:
-                # Not per-item in batch mode; include as a generic note if provided
                 messages.append({"role": "user", "content": self._safe_format(system_prompt_template, {})})
             messages.append({"role": "user", "content": batch_instruction})
 
@@ -286,15 +360,19 @@ class LLMDataFrame:
             try:
                 parsed_batch = parse_model(BatchModel, content)
                 batch_results = getattr(parsed_batch, "results", [])
-                # Extend outputs with parsed results (may be fewer if model errs)
-                for item in batch_results:
-                    outputs.append(item)
-                # If fewer results returned than inputs, pad with None
-                if len(batch_results) < len(chunk):
-                    outputs.extend([None] * (len(chunk) - len(batch_results)))
+                # Map results to signatures for this chunk
+                for i in range(len(chunk_signatures)):
+                    if i < len(batch_results):
+                        result_by_signature[chunk_signatures[i]] = batch_results[i]
+                    else:
+                        result_by_signature[chunk_signatures[i]] = None
             except Exception as e:
                 logger.warning("Batch parse failed; inserting None values. Error: %s", e)
-                outputs.extend([None] * len(chunk))
+                for sig in chunk_signatures:
+                    result_by_signature[sig] = None
+
+        # Broadcast unique results back to all rows
+        outputs = [result_by_signature.get(sig) for sig in signatures]
 
         # Add columns from outputs
         if outputs:
@@ -305,6 +383,6 @@ class LLMDataFrame:
 
         if usages:
             total = sum(u.get("total_tokens") or 0 for u in usages)
-            logger.info("Processed %d rows (batched), total_tokens=%s", len(outputs), total)
+            logger.info("Processed %d rows (batched unique=%d), total_tokens=%s", len(outputs), len(unique_values), total)
 
         return self.df
