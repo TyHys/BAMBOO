@@ -75,6 +75,13 @@ print(out2[["text", "score", "explanation"]])
 ### Recommended usage
 - Use the pandas accessor methods: `df.bamboo.enrich(...)` and `df.bamboo.batch_enrich(...)`.
 
+### Progress bar
+- The progress bar (tqdm) is disabled by default. Enable it per call with `progress=True`:
+  ```python
+  df.bamboo.enrich(..., progress=True)
+  df.bamboo.batch_enrich(..., progress=True)
+  ```
+
 ### Multi-column templating
 Reference multiple columns by name directly in your templates.
 ```python

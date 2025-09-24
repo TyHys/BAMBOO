@@ -84,7 +84,7 @@ class LLMDataFrame:
         model: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: Optional[int] = None,
-        progress: bool = True,
+        progress: bool = False,
     ) -> pd.DataFrame:
         """Enrich DataFrame by applying LLM with structured response.
 
@@ -247,7 +247,7 @@ class LLMDataFrame:
         model: Optional[str] = kwargs.pop("model", None)
         temperature: float = kwargs.pop("temperature", 0.0)
         max_tokens: Optional[int] = kwargs.pop("max_tokens", None)
-        progress: bool = kwargs.pop("progress", True)
+        progress: bool = kwargs.pop("progress", False)
         batch_size: int = kwargs.pop("batch_size", 5)
 
         if kwargs:
