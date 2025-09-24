@@ -139,6 +139,26 @@ get_ipython().kernel.do_shutdown(True)
   )
   ```
 
+## Resume runs
+
+Long-running enrich jobs can be resumed without re-calling the LLM for completed items. Pass a `resume_path` file, and BAMBOO will persist results incrementally and reuse them on subsequent runs with the exact same configuration (model, temperature, schema, and templates).
+
+```python
+df_out = df.bamboo.enrich(
+    response_model=SentimentResult,
+    user_prompt_template=user_prompt_template,
+    system_prompt_template=system_prompt_template,
+    batch_size=5,
+    resume_path="./.bamboo_runs/sentiment_run.json",
+    temperature=0.0,
+)
+```
+
+Notes:
+- Resumability leverages the same unique-combination optimization. Only the remaining unique contexts are sent to the LLM.
+- The resume file is only used if the metadata matches the current run (model, temperature, max_tokens, JSON schema, and templates).
+- The file is updated as results come in; you can safely interrupt and rerun later.
+
 ## Models and Strict JSON
 BAMBOO enforces strict JSON with OpenAI’s `response_format=json_schema`. The Pydantic model’s JSON schema is adapted to set `additionalProperties=false` across all object nodes for consistent parsing.
 
@@ -155,7 +175,5 @@ MIT
 ## To-do
 
 * Experiment with various models to ensure compatability.
-* Realtime file writing
-* Resume enrichment from partial completion
 * Add Claude support
 * Add Gemini support

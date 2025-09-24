@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from typing import Any, Dict, Iterable, List, Optional, Type, Union, Set
 from string import Formatter
 
@@ -86,6 +87,7 @@ class LLMDataFrame:
         max_tokens: Optional[int] = None,
         progress: bool = False,
         batch_size: int = 1,
+        resume_path: Optional[str] = None,
     ) -> pd.DataFrame:
         """Enrich DataFrame by applying LLM with structured response.
 
@@ -151,9 +153,71 @@ class LLMDataFrame:
 
         chosen_model = model or self.client.model
         schema_h = self._schema_hash(schema)
+        resume_results: Dict[str, Optional[str]] = {}
+
+        # Resume support: load existing results map if provided and compatible
+        def _resume_meta_dict() -> Dict[str, Any]:
+            return {
+                "version": 1,
+                "model": chosen_model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "schema_hash": schema_h,
+                "user_prompt_template": user_prompt_template,
+                "system_prompt_template": system_prompt_template or "",
+            }
+
+        def _resume_load(path: str) -> None:
+            nonlocal resume_results
+            if not os.path.exists(path):
+                return
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                return
+            meta = data.get("meta")
+            if meta != _resume_meta_dict():
+                return
+            loaded = data.get("results") or {}
+            if isinstance(loaded, dict):
+                # keep only string or None values
+                filtered: Dict[str, Optional[str]] = {}
+                for k, v in loaded.items():
+                    if v is None or isinstance(v, str):
+                        filtered[k] = v
+                resume_results.update(filtered)
+
+        def _resume_save(path: str) -> None:
+            if not path:
+                return
+            data = {"meta": _resume_meta_dict(), "results": resume_results}
+            tmp = path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp, path)
+            except Exception:
+                # Best effort; ignore persistence errors
+                pass
+
+        if resume_path:
+            _resume_load(resume_path)
 
         # Hold results per signature and then broadcast
         result_by_signature: Dict[str, Optional[BaseModel]] = {}
+
+        # Prefill from resume file if present
+        if resume_results:
+            for sig, content in resume_results.items():
+                if content is None:
+                    result_by_signature[sig] = None
+                    continue
+                try:
+                    parsed = parse_model(response_model, content)
+                except Exception:
+                    parsed = None  # ignore parse errors from resume file
+                result_by_signature[sig] = parsed
 
         if batch_size <= 1:
             rep_iterator: Iterable[int] = rep_indices
@@ -163,6 +227,10 @@ class LLMDataFrame:
             for rep_idx in rep_iterator:
                 context = contexts[rep_idx]
                 sig = signatures[rep_idx]
+
+                # Skip if already available (e.g., from resume file)
+                if sig in result_by_signature:
+                    continue
 
                 # Build prompts
                 user_prompt = self._safe_format(user_prompt_template, context)
@@ -209,6 +277,9 @@ class LLMDataFrame:
                     parsed = None  # type: ignore[assignment]
 
                 result_by_signature[sig] = parsed
+                if resume_path:
+                    resume_results[sig] = content if content is not None else None
+                    _resume_save(resume_path)
                 if usage:
                     usages.append(usage)
         else:
@@ -228,16 +299,24 @@ class LLMDataFrame:
                 for i in range(0, len(seq), size):
                     yield seq[i : i + size]
 
-            chunks: List[List[Dict[str, Any]]] = list(chunk_iter(unique_contexts, batch_size))
-            iterator: Iterable[List[Dict[str, Any]]] = chunks
+            # Consider only remaining (not yet available) signatures
+            remaining_indices: List[int] = [i for i, sig in enumerate(unique_signatures) if sig not in result_by_signature]
+            remaining_contexts: List[Dict[str, Any]] = [unique_contexts[i] for i in remaining_indices]
+            remaining_signatures: List[str] = [unique_signatures[i] for i in remaining_indices]
+
+            chunks: List[List[int]] = [
+                remaining_indices[i : i + batch_size]
+                for i in range(0, len(remaining_indices), batch_size)
+            ]
+            iterator: Iterable[List[int]] = chunks
             if progress:
                 iterator = tqdm(chunks, total=len(chunks), desc="LLM enrich (batched unique)")
 
-            start = 0
-            for chunk in iterator:
-                chunk_signatures = unique_signatures[start : start + len(chunk)]
-                chunk_contexts = unique_contexts[start : start + len(chunk)]
-                start += len(chunk)
+            for index_chunk in iterator:
+                if not index_chunk:
+                    continue
+                chunk_signatures = [unique_signatures[i] for i in index_chunk]
+                chunk_contexts = [unique_contexts[i] for i in index_chunk]
 
                 # Construct a batch prompt
                 items_lines: List[str] = []
@@ -273,12 +352,26 @@ class LLMDataFrame:
                     for i in range(len(chunk_signatures)):
                         if i < len(batch_results):
                             result_by_signature[chunk_signatures[i]] = batch_results[i]
+                            if resume_path:
+                                # Store per-item JSON for resume: serialize the individual object
+                                try:
+                                    item_json = json.dumps(batch_results[i].model_dump(), ensure_ascii=False)
+                                except Exception:
+                                    item_json = None  # fall back to None if cannot serialize
+                                resume_results[chunk_signatures[i]] = item_json
                         else:
                             result_by_signature[chunk_signatures[i]] = None
+                            if resume_path:
+                                resume_results[chunk_signatures[i]] = None
                 except Exception as e:
                     logger.warning("Batch parse failed; inserting None values. Error: %s", e)
                     for sig in chunk_signatures:
                         result_by_signature[sig] = None
+                        if resume_path:
+                            resume_results[sig] = None
+
+                if resume_path:
+                    _resume_save(resume_path)
 
             # After batched processing, continue to broadcast below
 

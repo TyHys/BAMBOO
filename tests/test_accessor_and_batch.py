@@ -84,3 +84,46 @@ def test_enrich_batched_deduplicates_unique_contexts() -> None:
     assert out.loc[0, "a"] == out.loc[2, "a"]
 
 
+def test_resume_path_reuses_results(tmp_path: Any) -> None:
+    df = pd.DataFrame({"text": ["a", "b", "a"]})
+
+    class M(BaseModel):
+        a: int
+        b: str
+
+    # First run returns two unique results (for 'a' and 'b')
+    first_contents = [
+        "{\"results\":[{\"a\":1,\"b\":\"x\"},{\"a\":2,\"b\":\"y\"}]}",
+    ]
+    client1 = DummyClient(first_contents)
+    resume_file = tmp_path / "resume.json"
+    out1 = df.bamboo.enrich(
+        client=client1,
+        response_model=M,
+        user_prompt_template="Return a and b for: {text}",
+        system_prompt_template=None,
+        batch_size=10,
+        progress=False,
+        use_cache=False,
+        resume_path=str(resume_file),
+    )
+    assert {"a", "b"}.issubset(out1.columns)
+    assert client1.calls == 1
+
+    # Second run with a client that would error if called: ensure no new calls
+    client2 = DummyClient(contents=[])
+    out2 = df.bamboo.enrich(
+        client=client2,
+        response_model=M,
+        user_prompt_template="Return a and b for: {text}",
+        system_prompt_template=None,
+        batch_size=10,
+        progress=False,
+        use_cache=False,
+        resume_path=str(resume_file),
+    )
+    assert client2.calls == 0
+    # Data should match the first run
+    assert out2.equals(out1)
+
+

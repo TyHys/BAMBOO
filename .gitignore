@@ -39,6 +39,7 @@ inputs/*
 inputs/
 !inputs/sample_data.csv
 !inputs/.gitkeep
+examples/demo_resume_data.json
 
 # LLM cache
 .bamboo_cache.json
